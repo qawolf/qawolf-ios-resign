@@ -1,4 +1,4 @@
-name: Release instrumentation.dylib
+name: Release instrumentation.dylib and zsign binaries
 
 on:
   push:
@@ -9,15 +9,61 @@ on:
 permissions:
   contents: write
 
+env:
+  ZSIGN_COMMIT: 9fd2942
+
 jobs:
-  upload_release_asset:
-    name: Upload instrumentation.dylib to release
+  build-zsign:
+    name: Build zsign (Darwin) & publish release assets
+    runs-on: macos-13
+
+    strategy:
+      matrix:
+        arch: [arm64, x86_64]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: brew install openssl@3
+
+      - name: Build zsign for ${{ matrix.arch }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone https://github.com/zhlynn/zsign.git /tmp/zsign
+          cd /tmp/zsign
+          git checkout $ZSIGN_COMMIT
+
+          # Compile for the requested architecture
+          clang++ *.cpp common/*.cpp \
+            -O3 -std=c++17 \
+            -arch ${{ matrix.arch }} \
+            -I$(brew --prefix openssl@3)/include \
+            -L$(brew --prefix openssl@3)/lib \
+            -lcrypto \
+            -o zsign
+
+          # Copy the binary back to the workspace with a descriptive filename
+          cp zsign "${{ github.workspace }}/zsign-darwin-${{ matrix.arch }}"
+
+      # Upload the zsign binary that we just built. Each matrix job uploads its own binary.
+      - name: Upload zsign binary to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: zsign-darwin-${{ matrix.arch }}
+
+  upload-instrumentation:
+    name: Upload instrumentation.dylib
+    needs: build-zsign
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Create GitHub release and upload asset
+      - name: Upload instrumentation.dylib to release
         uses: softprops/action-gh-release@v2
         with:
           files: instrumentation.dylib
+
